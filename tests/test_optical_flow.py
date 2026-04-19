@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from kpe.extract.optical_flow import FlowConfig
+from kpe.extract.optical_flow import FlowConfig, SparseOpticalFlowExtractor
 
 def test_flow_config_defaults():
     config = FlowConfig()
@@ -27,3 +27,22 @@ def test_flow_config_defaults():
     assert isinstance(config.magnitude_clip, float)
     
     assert isinstance(config.min_tracked_points, int)
+
+@pytest.mark.parametrize("max_corners", [50, 200])
+def test_detect_corners_synthetic(max_corners):
+    # Generate a synthetic 240x320 uint8 grayscale checkerboard frame
+    y, x = np.indices((240, 320))
+    frame = (((x // 20) + (y // 20)) % 2 * 255).astype(np.uint8)
+    
+    config = FlowConfig(max_corners=max_corners)
+    extractor = SparseOpticalFlowExtractor(config)
+    
+    # Process two identical copies of the frame
+    descriptors = extractor.process_frames([frame, frame])
+    
+    # Assertions
+    assert len(descriptors) == 1
+    desc = descriptors[0]
+    
+    assert desc.vector.shape == (10,)
+    assert desc.n_points >= 0
