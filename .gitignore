@@ -12,3 +12,4 @@ data/
 *.npy
 *.pkl
 .DS_Store
+.vscode/
