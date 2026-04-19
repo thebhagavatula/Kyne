@@ -1,7 +1,17 @@
 import sys
 
-def verify_environment():
+def verify_environment() -> None:
+    """
+    Verifies that the required environment packages cv2, numpy, and dtaidistance are installed.
+    
+    Parameters:
+        None
+        
+    Returns:
+        None
+    """
     missing_packages = False
+
 
     try:
         import cv2

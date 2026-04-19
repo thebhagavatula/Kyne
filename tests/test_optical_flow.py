@@ -2,8 +2,18 @@ import pytest
 import numpy as np
 from kpe.extract.optical_flow import FlowConfig, SparseOpticalFlowExtractor
 
-def test_flow_config_defaults():
+def test_flow_config_defaults() -> None:
+    """
+    Validates FlowConfig defaults ensuring correct structure padding alongside parameter types.
+    
+    Parameters:
+        None
+        
+    Returns:
+        None
+    """
     config = FlowConfig()
+
     
     # Assert descriptor dimensionality is correctly set to 10
     assert config.descriptor_dim == 10
@@ -29,7 +39,16 @@ def test_flow_config_defaults():
     assert isinstance(config.min_tracked_points, int)
 
 @pytest.mark.parametrize("max_corners", [50, 200])
-def test_detect_corners_synthetic(max_corners):
+def test_detect_corners_synthetic(max_corners: int) -> None:
+    """
+    Processes synthetic 240x320 checkerboard frames asserting deterministic tracker limits.
+    
+    Parameters:
+        max_corners (int): Limit bounding to configure Shi-Tomasi feature search.
+        
+    Returns:
+        None
+    """
     # Generate a synthetic 240x320 uint8 grayscale checkerboard frame
     y, x = np.indices((240, 320))
     frame = (((x // 20) + (y // 20)) % 2 * 255).astype(np.uint8)

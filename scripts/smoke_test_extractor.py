@@ -2,13 +2,30 @@ import argparse
 import sys
 import os
 from pathlib import Path
+
+# Ensure kpe module is importable when run directly
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import cv2
 import numpy as np
 
 from kpe.extract.optical_flow import FlowConfig, SparseOpticalFlowExtractor
 
-def main():
+def main() -> None:
+    """
+    Main entry point for the optical flow smoke test script.
+    
+    Parses CLI arguments, instantiates the FlowConfig and SparseOpticalFlowExtractor,
+    processes the input video, calculates performance bounds, and saves the S(t) signature.
+    
+    Parameters:
+        None
+        
+    Returns:
+        None
+    """
     parser = argparse.ArgumentParser(description="Smoke test for optical flow extractor.")
+
     parser.add_argument("video_path", type=str, help="Path to the input video file")
     parser.add_argument("--max-corners", type=int, default=None, help="Max feature points to track")
     parser.add_argument("--quality-level", type=float, default=None, help="Min accepted quality ratio (0-1)")
