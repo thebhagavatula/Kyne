@@ -20,11 +20,11 @@ to these transforms.
 | Demo     | Dashboard                        | Streamlit                     |
 
 ## Quick Start
-\`\`\`bash
+```bash
 pip install -r requirements.txt
 uvicorn api.main:app --reload          # Start verification API
 streamlit run kpe/demo/dashboard.py    # Launch demo dashboard
-\`\`\`
+```
 
 ## API
 POST /verify — submit a clip, receive DTW distance + MATCH/NO MATCH verdict
