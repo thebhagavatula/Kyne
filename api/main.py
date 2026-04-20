@@ -35,5 +35,5 @@ def match_vid(inputData:InputVid):
     return {
         "match_id": best_id,
         "confidence": confidence,
-        "verdict": "Match" if confidence > 0.5 else "No matches"
+        "verdict": "MATCH" if confidence > 0.5 else "NO MATCH"
     }
