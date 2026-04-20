@@ -13,3 +13,10 @@ data/
 *.pkl
 .DS_Store
 .vscode/
+
+# PyCharm / JetBrains
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
