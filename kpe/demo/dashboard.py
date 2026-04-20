@@ -18,7 +18,7 @@ st.divider()
 # mock data to be replaced with real api response on day 4
 t = np.linspace(0, 4 * np.pi, 100)
 MOCK = {
-    "match_id":     "ipl_clip_broadcast_042",
+    "match_id": 0,
     "confidence":   0.91,
     "verdict":      "MATCH",
     "ref_signal":   np.sin(t) + 0.3 * np.sin(3 * t) + np.random.normal(0, 0.03, 100),
