@@ -6,8 +6,8 @@ from dtaidistance import dtw
 app = FastAPI()
 
 demoval = [
-    [0.1, 0.4, 0.6, 0.8],
-    [0.9, 0.2, 0.3, 0.1]
+    [0.1 * i for i in range(20)],
+    [0.9 * i for i in range(20)]
 ]
 
 class InputVid(BaseModel):
@@ -23,23 +23,37 @@ def extract_signature(video_bytes):
 def read_root():
     return {"message": "Sab Khairiyat"}
 
+# the input video can be a part of da reference video so we will need windows of traversal
+def sliding_dtw(query, ref):
+    window_size = len(query)
+    best = float("inf")
 
+    if len(ref) < window_size:
+        return dtw.distance(query, ref)
+    
+    for i in range(len(ref) - window_size + 1):
+        window = ref[i:i + window_size]
+        score = dtw.distance(query, window)
+        best = min(best, score)
+
+    return best
+
+# Confidence formula needs to be changed
 def find_best_match(query_signature):
     best_score = float("inf")
     best_id = -1
 
     for i, ref in enumerate(demoval):
-        score = dtw.distance(query_signature, ref)
+        score = sliding_dtw(query_signature, ref)
 
         if score < best_score:
             best_score = score
             best_id = i
 
     confidence = 1 / (1 + best_score)
-
     return best_id, confidence
 
-# /match is jus for debugging
+# /match is jus for summa
 @app.post("/match")
 def match_vid(inputData: InputVid):
     best_id, confidence = find_best_match(inputData.query_signature)
@@ -50,6 +64,7 @@ def match_vid(inputData: InputVid):
         "verdict": "MATCH" if confidence > 0.5 else "NO MATCH"
     }
 
+# route at which upload happens and find_best_match is called
 @app.post("/verify")
 async def verify_video(file: UploadFile = File(...)):
     video_bytes = await file.read()
@@ -65,6 +80,7 @@ async def verify_video(file: UploadFile = File(...)):
     best_id, confidence = find_best_match(query_signature)
 
     return {
+        "file_name": file.filename,
         "match_id": best_id,
         "confidence": confidence,
         "verdict": "MATCH" if confidence > 0.5 else "NO MATCH"
