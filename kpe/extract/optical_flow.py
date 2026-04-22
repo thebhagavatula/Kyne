@@ -128,8 +128,9 @@ class SparseOpticalFlowExtractor:
     signature = extractor.build_signature(descriptors)  # shape (T, 10)
     """
 
-    def __init__(self, config: Optional[FlowConfig] = None):
+    def __init__(self, config: Optional[FlowConfig] = None, debug: bool = False):
         self.cfg = config or FlowConfig()
+        self.debug = debug
         logger.info(
             "SparseOpticalFlowExtractor initialised — "
             "descriptor_dim=%d, max_corners=%d, pyramid_levels=%d",
@@ -223,9 +224,13 @@ class SparseOpticalFlowExtractor:
         self,
         descriptors: list[MotionDescriptor],
         fill_invalid: bool = True,
+        max_interp_gap: int = 5,
+        smooth_window: int = 3,
+        l2_normalize: bool = True
     ) -> np.ndarray:
         """
         Stack MotionDescriptors into a 2-D signature array S(t).
+        Applies gap interpolation, median smoothing, and L2 normalization.
 
         Parameters
         ----------
@@ -233,6 +238,12 @@ class SparseOpticalFlowExtractor:
         fill_invalid : bool
             If True, replace invalid frames with zero vectors (DTW-safe).
             If False, drop invalid frames entirely (shorter but cleaner).
+        max_interp_gap : int
+            Maximum consecutive invalid frames to linearly interpolate.
+        smooth_window : int
+            Window size for temporal smoothing via rolling median.
+        l2_normalize : bool
+            If True, L2 normalize the descriptor of each frame.
 
         Returns
         -------
@@ -244,14 +255,62 @@ class SparseOpticalFlowExtractor:
 
         dim = self.cfg.descriptor_dim
         rows = []
+        is_valid = []
 
+        # 1. Base collection
         for d in descriptors:
             if d.valid:
                 rows.append(d.vector)
+                is_valid.append(True)
             elif fill_invalid:
                 rows.append(np.zeros(dim, dtype=np.float32))
+                is_valid.append(False)
+        
+        # If not filling invalid, just stack and optionally normalize
+        if not fill_invalid:
+            sig = np.stack(rows, axis=0).astype(np.float32)
+            if l2_normalize:
+                norms = np.linalg.norm(sig, axis=1, keepdims=True)
+                sig = np.divide(sig, norms, out=np.zeros_like(sig), where=norms>1e-6)
+            return sig
 
         sig = np.stack(rows, axis=0).astype(np.float32)
+        is_valid = np.array(is_valid, dtype=bool)
+        n_frames = len(sig)
+
+        # 2. Linear interpolation for small gaps
+        if max_interp_gap > 0:
+            import itertools
+            import operator
+            invalid_indices = np.where(~is_valid)[0]
+            if len(invalid_indices) > 0 and is_valid.any():
+                for k, g in itertools.groupby(enumerate(invalid_indices), lambda ix: ix[0] - ix[1]):
+                    group = list(map(operator.itemgetter(1), g))
+                    if len(group) < max_interp_gap:
+                        start = group[0] - 1
+                        end = group[-1] + 1
+                        if start >= 0 and end < n_frames and is_valid[start] and is_valid[end]:
+                            x = [start, end]
+                            for d_idx in range(dim):
+                                y = [sig[start, d_idx], sig[end, d_idx]]
+                                sig[group, d_idx] = np.interp(group, x, y)
+                            is_valid[group] = True
+
+        # 3. Temporal Smoothing (Median Filter)
+        if smooth_window > 1:
+            pad = smooth_window // 2
+            sig_smoothed = np.copy(sig)
+            padded_sig = np.pad(sig, ((pad, pad), (0, 0)), mode='edge')
+            for i in range(n_frames):
+                window = padded_sig[i:i + smooth_window, :]
+                sig_smoothed[i] = np.median(window, axis=0)
+            sig = sig_smoothed
+
+        # 4. Feature Normalisation (L2)
+        if l2_normalize:
+            norms = np.linalg.norm(sig, axis=1, keepdims=True)
+            sig = np.divide(sig, norms, out=np.zeros_like(sig), where=norms>1e-6)
+
         logger.info("Built S(t) signature: shape=%s", sig.shape)
         return sig
 
@@ -298,6 +357,16 @@ class SparseOpticalFlowExtractor:
 
         p0 = prev_pts[good_mask].reshape(-1, 2)
         p1 = curr_pts[good_mask].reshape(-1, 2)
+
+        if self.debug:
+            vis_frame = cv2.cvtColor(curr_gray, cv2.COLOR_GRAY2BGR)
+            for (new_pt, old_pt) in zip(p1, p0):
+                a, b = int(new_pt[0]), int(new_pt[1])
+                c, d = int(old_pt[0]), int(old_pt[1])
+                cv2.line(vis_frame, (a, b), (c, d), (0, 255, 0), 2)
+                cv2.circle(vis_frame, (a, b), 3, (0, 0, 255), -1)
+            cv2.imshow("Tracking Debug", vis_frame)
+            cv2.waitKey(1)
 
         # --- Flow vectors ---
         flow = p1 - p0                              # shape (N, 2)
