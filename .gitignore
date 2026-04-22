@@ -12,6 +12,7 @@ data/
 *.npy
 *.pkl
 .DS_Store
+.vscode/
 
 # PyCharm / JetBrains
 .idea/
