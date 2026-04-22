@@ -12,10 +12,4 @@ data/
 *.npy
 *.pkl
 .DS_Store
-
-# PyCharm / JetBrains
-.idea/
-*.iml
-*.ipr
-*.iws
-out/
+.idea
