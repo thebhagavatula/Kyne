@@ -31,6 +31,8 @@ class FlowConfig:
     # --- Frame resolution (should match ingest resize) ---
     frame_width: int = 320
     frame_height: int = 240
+    target_size: tuple[int, int] = (320, 240)
+    frame_skip: int = 1
 
     # --- Shi-Tomasi corner detection ---
     max_corners: int = 200          # Max feature points to track
@@ -170,11 +172,14 @@ class SparseOpticalFlowExtractor:
             frame_idx = 0
 
             while True:
+                for _ in range(self.cfg.frame_skip - 1):
+                    cap.grab()
+
                 curr_gray = self._read_gray_frame(cap)
                 if curr_gray is None:
                     break  # End of stream
 
-                frame_idx += 1
+                frame_idx += self.cfg.frame_skip
                 desc = self._compute_descriptor(
                     prev_gray, curr_gray, prev_pts, frame_idx
                 )
@@ -445,6 +450,8 @@ class SparseOpticalFlowExtractor:
         ret, frame = cap.read()
         if not ret or frame is None:
             return None
+        if self.cfg.target_size is not None:
+            frame = cv2.resize(frame, self.cfg.target_size)
         return self._to_gray(frame)
 
     def _to_gray(self, frame: np.ndarray) -> np.ndarray:
