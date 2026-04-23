@@ -83,5 +83,7 @@ async def verify_video(file: UploadFile = File(...)):
         "file_name": file.filename,
         "match_id": best_id,
         "confidence": confidence,
-        "verdict": "MATCH" if confidence > 0.5 else "NO MATCH"
+        "verdict": "MATCH" if confidence > 0.5 else "NO MATCH",
+        "query_signal": query_signature,
+        "ref_signal": demoval[best_id]
     }

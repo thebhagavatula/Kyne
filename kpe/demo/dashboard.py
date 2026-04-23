@@ -91,14 +91,18 @@ with col_result:
 
 st.divider()
 
-# overlays reference and suspect signals with distinct colors
+# uses real signals from api if available otherwise falls back to mock
+ref_signal   = result.get("ref_signal",   list(MOCK["ref_signal"]))
+query_signal = result.get("query_signal", list(MOCK["query_signal"]))
+n            = max(len(ref_signal), len(query_signal))
+
 st.subheader("Motion Signature Waveform - S(t) vs S prime(t)")
 st.caption("Reference broadcast overlaid with suspect clip")
 
 wave_df = pd.DataFrame({
-    "frame":  list(range(100)) * 2,
-    "signal": list(MOCK["ref_signal"]) + list(MOCK["query_signal"]),
-    "source": ["Reference S(t)"] * 100 + ["Suspect S prime(t)"] * 100,
+    "frame":  list(range(len(ref_signal))) + list(range(len(query_signal))),
+    "signal": ref_signal + query_signal,
+    "source": ["Reference S(t)"] * len(ref_signal) + ["Suspect S prime(t)"] * len(query_signal),
 })
 
 wave_chart = alt.Chart(wave_df).mark_line().encode(
