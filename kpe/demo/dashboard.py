@@ -121,7 +121,7 @@ if result is not None:
         strokeWidth=alt.value(2)
     ).properties(height=300)
 
-    st.altair_chart(wave_chart, use_container_width=True)
+    st.altair_chart(wave_chart, width="stretch")
 
     st.divider()
     st.subheader("DTW Alignment Path")
@@ -137,4 +137,4 @@ if result is not None:
         y=alt.Y("suspect frame:Q",   title="suspect frame index"),
     ).properties(height=300)
 
-    st.altair_chart(dtw_chart, use_container_width=True)
+    st.altair_chart(dtw_chart, width="stretch")
