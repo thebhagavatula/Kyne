@@ -30,7 +30,6 @@ MOCK = {
 }
 
 # sends video file to /verify and returns api response dict
-# sends video file to /verify and returns api response dict
 def call_verify_api(uploaded_file):
     try:
         files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
@@ -63,77 +62,79 @@ with col_upload:
         st.info("No file uploaded - showing mock demo results")
 
 # uses session state result if available otherwise falls back to mock
-result = st.session_state.get("result", MOCK)
+# only shows results after a file is verified
+result = st.session_state.get("result", None)
 
 with col_result:
     st.subheader("Verification Result")
-    verdict = result.get("verdict", MOCK["verdict"])
-    conf    = result.get("confidence", MOCK["confidence"])
-    mid     = result.get("match_id", MOCK["match_id"])
 
-    st.write("")
-    st.write("")
-
-    # renders green match or red no match verdict
-    if verdict == "MATCH":
-        st.markdown("<div class='verdict-match'>MATCH</div>", unsafe_allow_html=True)
+    if result is None:
+        st.info("Upload a video and click Verify to see results")
     else:
-        st.markdown("<div class='verdict-nomatch'>NO MATCH</div>", unsafe_allow_html=True)
+        verdict = result.get("verdict")
+        conf    = result.get("confidence")
+        mid     = result.get("match_id")
 
-    st.write("")
-    st.progress(conf, text=f"Confidence: {conf:.0%}")
-    st.caption(f"Match ID: {mid}")
-    st.write("")
+        st.write("")
+        st.write("")
 
-    col_a, col_b = st.columns(2)
-    col_a.metric("Confidence", f"{conf:.0%}")
-    col_b.metric("Distortion", f"{1 - conf:.0%}")
+        if verdict == "MATCH":
+            st.markdown("<div class='verdict-match'>MATCH</div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div class='verdict-nomatch'>NO MATCH</div>", unsafe_allow_html=True)
 
-st.divider()
+        st.write("")
+        st.progress(conf, text=f"Confidence: {conf:.0%}")
+        st.caption(f"Match ID: {mid}")
+        st.write("")
 
-# uses real signals from api if available otherwise falls back to mock
-ref_signal   = list(result.get("ref_signal",   list(MOCK["ref_signal"])))
-query_signal = list(result.get("query_signal", list(MOCK["query_signal"])))
+        col_a, col_b = st.columns(2)
+        col_a.metric("Confidence", f"{conf:.0%}")
+        col_b.metric("Distortion", f"{1 - conf:.0%}")
 
-n = max(len(ref_signal), len(query_signal))
-ref_signal   = ref_signal   + [None] * (n - len(ref_signal))
-query_signal = query_signal + [None] * (n - len(query_signal))
+# only renders charts after verification
+if result is not None:
+    ref_signal   = list(result.get("ref_signal",   []))
+    query_signal = list(result.get("query_signal", []))
 
-st.subheader("Motion Signature Waveform - S(t) vs S prime(t)")
-st.caption("Reference broadcast overlaid with suspect clip")
+    n = max(len(ref_signal), len(query_signal))
+    ref_signal   = ref_signal   + [None] * (n - len(ref_signal))
+    query_signal = query_signal + [None] * (n - len(query_signal))
 
-wave_df = pd.DataFrame({
-    "frame":  list(range(n)) + list(range(n)),
-    "signal": ref_signal + query_signal,
-    "source": ["Reference S(t)"] * n + ["Suspect S prime(t)"] * n,
-})
+    st.divider()
+    st.subheader("Motion Signature Waveform - S(t) vs S prime(t)")
+    st.caption("Reference broadcast overlaid with suspect clip")
 
-wave_chart = alt.Chart(wave_df).mark_line().encode(
-    x=alt.X("frame:Q", title="frame index"),
-    y=alt.Y("signal:Q", title="motion magnitude"),
-    color=alt.Color("source:N", scale=alt.Scale(
-        domain=["Reference S(t)", "Suspect S prime(t)"],
-        range=["#489fb5", "#ff8800"]
-    )),
-    strokeWidth=alt.value(2)
-).properties(height=300)
+    wave_df = pd.DataFrame({
+        "frame":  list(range(n)) + list(range(n)),
+        "signal": ref_signal + query_signal,
+        "source": ["Reference S(t)"] * n + ["Suspect S prime(t)"] * n,
+    })
 
-st.altair_chart(wave_chart, use_container_width=True)
+    wave_chart = alt.Chart(wave_df).mark_line().encode(
+        x=alt.X("frame:Q", title="frame index"),
+        y=alt.Y("signal:Q", title="motion magnitude"),
+        color=alt.Color("source:N", scale=alt.Scale(
+            domain=["Reference S(t)", "Suspect S prime(t)"],
+            range=["#489fb5", "#ff8800"]
+        )),
+        strokeWidth=alt.value(2)
+    ).properties(height=300)
 
-st.divider()
+    st.altair_chart(wave_chart, use_container_width=True)
 
-# shows dtw warping path between reference and suspect frames
-st.subheader("DTW Alignment Path")
-st.caption("Diagonal means perfect sync between reference and suspect")
+    st.divider()
+    st.subheader("DTW Alignment Path")
+    st.caption("Diagonal means perfect sync between reference and suspect")
 
-dtw_df = pd.DataFrame({
-    "reference frame": MOCK["dtw_path_x"],
-    "suspect frame":   MOCK["dtw_path_y"],
-})
+    dtw_df = pd.DataFrame({
+        "reference frame": MOCK["dtw_path_x"],
+        "suspect frame":   MOCK["dtw_path_y"],
+    })
 
-dtw_chart = alt.Chart(dtw_df).mark_line(color="#489fb5", strokeWidth=2).encode(
-    x=alt.X("reference frame:Q", title="reference frame index"),
-    y=alt.Y("suspect frame:Q",   title="suspect frame index"),
-).properties(height=300)
+    dtw_chart = alt.Chart(dtw_df).mark_line(color="#489fb5", strokeWidth=2).encode(
+        x=alt.X("reference frame:Q", title="reference frame index"),
+        y=alt.Y("suspect frame:Q",   title="suspect frame index"),
+    ).properties(height=300)
 
-st.altair_chart(dtw_chart, use_container_width=True)
+    st.altair_chart(dtw_chart, use_container_width=True)
