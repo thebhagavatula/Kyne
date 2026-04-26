@@ -4,11 +4,19 @@ __pycache__/
 .env
 venv/
 .venv/
-*.mp4
-*.avi
-*.mov
-*.mkv
+# *.mp4
+#*.avi
+#*.mov
+#*.mkv
 data/
 *.npy
 *.pkl
 .DS_Store
+.vscode/
+
+# PyCharm / JetBrains
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
