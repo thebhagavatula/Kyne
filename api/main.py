@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Optional
-from dtaidistance import dtw
+from dtaidistance import dtw_ndim
 import tempfile
 import os
 import numpy as np
@@ -9,7 +9,6 @@ import sys
 import json
 from pathlib import Path
 
-# Make kpe package importable regardless of working directory
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from kpe.extract.optical_flow import SparseOpticalFlowExtractor, FlowConfig
@@ -17,22 +16,69 @@ from kpe.extract.optical_flow import SparseOpticalFlowExtractor, FlowConfig
 app = FastAPI()
 
 # ---------------------------------------------------------------------------
-# Reference DB (real signatures from your local generated reference_signatures.json)
+# Config
 # ---------------------------------------------------------------------------
 
 _cfg = FlowConfig()
-DESCRIPTOR_DIM = _cfg.descriptor_dim
+DESCRIPTOR_DIM = _cfg.descriptor_dim  # 10
+
+TARGET_FRAMES = 120        # raised from 60 — more detail, still fast enough
+SAKOE_CHIBA_FRAC = 0.2    # loosened from 0.1 — allows more warp on re-encoded clips
+
+# ---------------------------------------------------------------------------
+# Reference DB
+# ---------------------------------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_FILE = BASE_DIR / "dataset" / "reference_signatures.json"
 
-if DATA_FILE.exists():
-    with open(DATA_FILE, "r") as f:
-        demoval = json.load(f)
-    print(f"Loaded {len(demoval)} reference signatures")
-else:
-    demoval = []
-    print("Warning: reference_signatures.json not found. demoval is empty.")
+MATCH_THRESHOLD = 4.0115
+
+
+def _downsample(sig: np.ndarray, target: int) -> np.ndarray:
+    """
+    Temporally downsample (T, D) → (target, D) via linear interpolation.
+    """
+    T = len(sig)
+    if T <= target:
+        return sig
+    indices = np.linspace(0, T - 1, target)
+    lo = np.floor(indices).astype(int)
+    hi = np.minimum(lo + 1, T - 1)
+    frac = (indices - lo)[:, None]
+    return ((1 - frac) * sig[lo] + frac * sig[hi]).astype(np.float32)
+
+
+def _load_references(path: Path) -> list[np.ndarray]:
+    """
+    Load reference signatures as (T, 10) float32 arrays.
+    Downsamples at load time — paid once, not per request.
+    L2 normalisation is OFF — raw descriptor values give DTW more to work with.
+    """
+    if not path.exists():
+        print("Warning: reference_signatures.json not found. demoval is empty.")
+        return []
+    
+    try:
+        with open(path, "r") as f:
+            raw = json.load(f)
+    except json.JSONDecodeError:
+        print("Warning: reference_signatures.json is empty or corrupt. demoval is empty.")
+        return []
+
+    refs = []
+    for entry in raw:
+        arr = np.array(entry, dtype=np.float32)
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, DESCRIPTOR_DIM)
+        arr = _downsample(arr, TARGET_FRAMES)
+        refs.append(arr)
+
+    print(f"Loaded {len(refs)} reference signatures — shape {refs[0].shape if refs else 'n/a'}")
+    return refs
+
+
+demoval: list[np.ndarray] = _load_references(DATA_FILE)
 
 # ---------------------------------------------------------------------------
 # Models
@@ -42,18 +88,17 @@ class InputVid(BaseModel):
     query_signature: List[float]
     video_id: Optional[str] = None
 
-
 # ---------------------------------------------------------------------------
 # Signature extraction
 # ---------------------------------------------------------------------------
 
-def extract_signature(video_bytes: bytes) -> list[float]:
+def extract_signature(video_bytes: bytes) -> np.ndarray:
     """
-    Convert uploaded video bytes into motion signature.
+    Extract (T, 10) float32 motion signature from raw video bytes.
+    Returns 2D ndarray — NOT flattened, NOT L2 normalised.
+    Raw values give DTW the variance it needs to discriminate between videos.
     """
-
     print("Starting signature extraction...")
-
     extractor = SparseOpticalFlowExtractor(config=FlowConfig())
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
@@ -63,79 +108,75 @@ def extract_signature(video_bytes: bytes) -> list[float]:
     try:
         descriptors = extractor.process_video(tmp_path)
 
-        print("Optical flow extraction complete")
-
         if not descriptors:
-            print("No descriptors found")
-            return [0.0] * DESCRIPTOR_DIM
+            print("No descriptors found — returning zeros")
+            return np.zeros((1, DESCRIPTOR_DIM), dtype=np.float32)
 
-        signature_2d: np.ndarray = extractor.build_signature(
+        sig: np.ndarray = extractor.build_signature(
             descriptors,
-            fill_invalid=True
+            fill_invalid=True,
+            l2_normalize=False,   # OFF — L2 norm collapses inter-video variance
         )
-
-        print("Signature build complete")
-
-        return signature_2d.flatten().astype(float).tolist()
+        sig = _downsample(sig, TARGET_FRAMES)
+        print(f"Signature shape after downsample: {sig.shape}")
+        return sig
 
     finally:
         os.unlink(tmp_path)
-
 
 # ---------------------------------------------------------------------------
 # DTW matching
 # ---------------------------------------------------------------------------
 
-def sliding_dtw(query: list[float], ref: list[float]) -> float:
+def sliding_dtw_nd(query: np.ndarray, ref: np.ndarray) -> float:
     """
-    Compare query signature against one reference signature.
+    Multivariate sliding DTW with Sakoe-Chiba band.
+    query : (T_q, 10), ref : (T_r, 10)
     """
+    T_q = len(query)
+    T_r = len(ref)
+    band = max(1, int(T_q * SAKOE_CHIBA_FRAC))
 
-    window_size = len(query)
-
-    if len(ref) < window_size:
-        return dtw.distance(query, ref)
+    if T_r < T_q:
+        return dtw_ndim.distance(query, ref, window=band)
 
     best = float("inf")
-
-    for i in range(len(ref) - window_size + 1):
-        window = ref[i:i + window_size]
-        score = dtw.distance(query, window)
-
+    for i in range(T_r - T_q + 1):
+        score = dtw_ndim.distance(query, ref[i : i + T_q], window=band)
         if score < best:
             best = score
 
     return best
 
 
-def find_best_match(query_signature: list[float]) -> tuple[int, float]:
-    """
-    Compare query against all reference signatures and return best match.
-    """
-
+def find_best_match(query_sig: np.ndarray) -> tuple[int, float, float, str]:
     if not demoval:
-        return -1, 0.0
+        return -1, 0.0, float("inf"), "NO MATCH"
 
-    best_score = float("inf")
-    best_id = -1
-
+    scores = []
     print("Starting DTW matching...")
 
     for i, ref in enumerate(demoval):
-        score = sliding_dtw(query_signature, ref)
+        score = sliding_dtw_nd(query_sig, ref)
+        scores.append(score)
+        print(f"  ref {i}: score={score:.4f}")
 
-        print(f"Compared with reference {i}: score={score}")
+    scores = np.array(scores)
+    best_id = int(np.argmin(scores))
+    best_score = float(scores[best_id])
 
-        if score < best_score:
-            best_score = score
-            best_id = i
+    if len(scores) > 1:
+        mean, std = scores.mean(), scores.std()
+        z = (mean - best_score) / (std + 1e-6)
+        confidence = float(np.clip(1 / (1 + np.exp(-z)), 0.0, 1.0))
+    else:
+        confidence = float(1 / (1 + best_score / TARGET_FRAMES))
 
-    confidence = 1 / (1 + best_score)
+    # verdict driven by raw score, not confidence
+    verdict = "MATCH" if best_score < MATCH_THRESHOLD else "NO MATCH"
 
-    print(f"Best match: {best_id}, confidence: {confidence}")
-
-    return best_id, confidence
-
+    print(f"Best match: ref {best_id}, raw_score={best_score:.4f}, verdict={verdict}")
+    return best_id, confidence, best_score, verdict
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -148,59 +189,43 @@ def read_root():
 
 @app.post("/match")
 def match_vid(inputData: InputVid):
-    """
-    Manual signature submission (JSON-based testing).
-    """
-
-    best_id, confidence = find_best_match(inputData.query_signature)
-
+    arr = np.array(inputData.query_signature, dtype=np.float32).reshape(-1, DESCRIPTOR_DIM)
+    arr = _downsample(arr, TARGET_FRAMES)
+    best_id, confidence, raw_score, verdict = find_best_match(arr)
     return {
         "match_id": best_id,
         "confidence": confidence,
-        "verdict": "MATCH" if confidence > 0.5 else "NO MATCH",
+        "raw_score": raw_score,
+        "verdict": verdict,
     }
 
 
 @app.post("/verify")
 async def verify_video(file: UploadFile = File(...)):
-    """
-    Upload video → extract signature → compare against reference DB.
-    """
-
+    """Upload video → extract signature → compare against reference DB."""
     print("Received file upload")
-
     video_bytes = await file.read()
-
-    print("File read complete")
 
     if not video_bytes:
         return {"error": "Empty file"}
 
     MAX_BYTES = 200 * 1024 * 1024
-
     if len(video_bytes) > MAX_BYTES:
-        return {
-            "error": f"File too large (limit {MAX_BYTES // (1024 * 1024)} MB)"
-        }
+        return {"error": f"File too large (limit {MAX_BYTES // (1024 * 1024)} MB)"}
 
-    query_signature = extract_signature(video_bytes)
-
-    print("Signature extraction complete")
-
-    best_id, confidence = find_best_match(query_signature)
-
-    print("Matching complete")
+    query_sig = extract_signature(video_bytes)
+    best_id, confidence, raw_score, verdict = find_best_match(query_sig)
 
     if best_id == -1:
-        return {
-            "error": "No reference database loaded"
-        }
+        return {"error": "No reference database loaded"}
 
     return {
         "file_name": file.filename,
         "match_id": best_id,
         "confidence": confidence,
-        "verdict": "MATCH" if confidence > 0.5 else "NO MATCH",
-        "query_signal": query_signature,
-        "ref_signal": demoval[best_id],
+        "raw_score": raw_score,
+        "verdict": "MATCH" if raw_score < MATCH_THRESHOLD else "NO MATCH",
+        # Motion energy per frame — meaningful waveform for the dashboard
+        "query_signal": np.linalg.norm(query_sig, axis=1).tolist(),
+        "ref_signal": np.linalg.norm(demoval[best_id], axis=1).tolist(),
     }
