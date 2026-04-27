@@ -128,8 +128,8 @@ if result is not None:
     st.caption("Diagonal means perfect sync between reference and suspect")
 
     dtw_df = pd.DataFrame({
-        "reference frame": MOCK["dtw_path_x"],
-        "suspect frame":   MOCK["dtw_path_y"],
+        "reference frame": result.get("dtw_path_x", MOCK["dtw_path_x"]),
+        "suspect frame":   result.get("dtw_path_y", MOCK["dtw_path_y"]),
     })
 
     dtw_chart = alt.Chart(dtw_df).mark_line(color="#489fb5", strokeWidth=2).encode(

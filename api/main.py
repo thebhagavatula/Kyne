@@ -107,7 +107,11 @@ def extract_signature(video_bytes: bytes) -> np.ndarray:
         tmp_path = tmp.name
 
     try:
-        descriptors = extractor.process_video(tmp_path)
+        try:
+            descriptors = extractor.process_video(tmp_path)
+        except OSError as e:
+            print(f"Failed to process video: {e}")
+            return np.zeros((1, DESCRIPTOR_DIM), dtype=np.float32)
 
         if not descriptors:
             print("No descriptors found — returning zeros")
@@ -129,7 +133,7 @@ def extract_signature(video_bytes: bytes) -> np.ndarray:
 # DTW matching
 # ---------------------------------------------------------------------------
 
-def sliding_dtw_nd(query: np.ndarray, ref: np.ndarray) -> float:
+def sliding_dtw_nd(query: np.ndarray, ref: np.ndarray) -> tuple[float, int]:
     """
     Multivariate sliding DTW with Sakoe-Chiba band.
     query : (T_q, 10), ref : (T_r, 10)
@@ -139,45 +143,59 @@ def sliding_dtw_nd(query: np.ndarray, ref: np.ndarray) -> float:
     band = max(1, int(T_q * SAKOE_CHIBA_FRAC))
 
     if T_r < T_q:
-        return dtw_ndim.distance(query, ref, window=band)
+        return dtw_ndim.distance(query, ref, window=band), 0
 
     best = float("inf")
+    best_idx = 0
     for i in range(T_r - T_q + 1):
         score = dtw_ndim.distance(query, ref[i : i + T_q], window=band)
         if score < best:
             best = score
+            best_idx = i
 
-    return best
+    return best, best_idx
 
 
-def find_best_match(query_sig: np.ndarray) -> tuple[int, float, float, str]:
+def find_best_match(query_sig: np.ndarray) -> tuple[int, float, float, str, list, list]:
     if not demoval:
-        return -1, 0.0, float("inf"), "NO MATCH"
+        return -1, 0.0, float("inf"), "NO MATCH", [], []
 
     scores = []
+    start_indices = []
     print("Starting DTW matching...")
 
     for i, ref in enumerate(demoval):
-        score = sliding_dtw_nd(query_sig, ref)
+        score, start_idx = sliding_dtw_nd(query_sig, ref)
         scores.append(score)
-        print(f"  ref {i}: score={score:.4f}")
+        start_indices.append(start_idx)
+        print(f"  ref {i}: score={score:.4f}, start={start_idx}")
 
     scores = np.array(scores)
     best_id = int(np.argmin(scores))
     best_score = float(scores[best_id])
+    best_start = start_indices[best_id]
 
-    if len(scores) > 1:
-        mean, std = scores.mean(), scores.std()
-        z = (mean - best_score) / (std + 1e-6)
-        confidence = float(np.clip(1 / (1 + np.exp(-z)), 0.0, 1.0))
-    else:
-        confidence = float(1 / (1 + best_score / TARGET_FRAMES))
+    # Map the DTW distance to a 0-1 confidence score using the empirical MATCH_THRESHOLD
+    confidence = float(np.clip(1.0 - (best_score / MATCH_THRESHOLD), 0.0, 1.0))
 
     # verdict driven by raw score, not confidence
     verdict = "MATCH" if best_score < MATCH_THRESHOLD else "NO MATCH"
+    
+    # Calculate Warping Path for the best match
+    T_q = len(query_sig)
+    band = max(1, int(T_q * SAKOE_CHIBA_FRAC))
+    best_ref = demoval[best_id]
+    
+    if len(best_ref) < T_q:
+        path = dtw_ndim.warping_path(query_sig, best_ref, window=band)
+    else:
+        path = dtw_ndim.warping_path(query_sig, best_ref[best_start : best_start + T_q], window=band)
+        
+    dtw_path_y = [p[0] for p in path] # query (suspect) frame
+    dtw_path_x = [(p[1] + best_start) for p in path] # ref frame (offset by window start)
 
     print(f"Best match: ref {best_id}, raw_score={best_score:.4f}, verdict={verdict}")
-    return best_id, confidence, best_score, verdict
+    return best_id, confidence, best_score, verdict, dtw_path_x, dtw_path_y
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -192,12 +210,14 @@ def read_root():
 def match_vid(inputData: InputVid):
     arr = np.array(inputData.query_signature, dtype=np.float32).reshape(-1, DESCRIPTOR_DIM)
     arr = _downsample(arr, TARGET_FRAMES)
-    best_id, confidence, raw_score, verdict = find_best_match(arr)
+    best_id, confidence, raw_score, verdict, dtw_x, dtw_y = find_best_match(arr)
     return {
         "match_id": best_id,
         "confidence": confidence,
         "raw_score": raw_score,
         "verdict": verdict,
+        "dtw_path_x": dtw_x,
+        "dtw_path_y": dtw_y,
     }
 
 
@@ -215,7 +235,7 @@ async def verify_video(file: UploadFile = File(...)):
         return {"error": f"File too large (limit {MAX_BYTES // (1024 * 1024)} MB)"}
 
     query_sig = extract_signature(video_bytes)
-    best_id, confidence, raw_score, verdict = find_best_match(query_sig)
+    best_id, confidence, raw_score, verdict, dtw_x, dtw_y = find_best_match(query_sig)
 
     if best_id == -1:
         return {"error": "No reference database loaded"}
@@ -249,4 +269,6 @@ async def verify_video(file: UploadFile = File(...)):
         "query_signal": query_signal_norm,
         "ref_signal": ref_signal_norm,
         "gemini_insights": gemini_insights,
+        "dtw_path_x": dtw_x,
+        "dtw_path_y": dtw_y,
     }

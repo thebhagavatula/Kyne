@@ -14,11 +14,11 @@ logger = logging.getLogger(__name__)
 
 # Attempt to import the generative AI library
 try:
-    import google.generativeai as genai
+    from google import genai
     HAS_GENAI = True
 except ImportError:
     HAS_GENAI = False
-    logger.warning("google-generativeai package is not installed. Gemini integration disabled.")
+    logger.warning("google-genai package is not installed. Gemini integration disabled.")
 
 
 class GeminiClient:
@@ -28,7 +28,8 @@ class GeminiClient:
 
     def __init__(self):
         self.is_active = False
-        self.model = None
+        self.client = None
+        self.model_name = "gemini-2.5-flash"
 
         if not HAS_GENAI:
             return
@@ -39,9 +40,7 @@ class GeminiClient:
             return
 
         try:
-            genai.configure(api_key=api_key)
-            # Using the free tier model (fast and cost-effective)
-            self.model = genai.GenerativeModel("gemini-1.5-flash")
+            self.client = genai.Client(api_key=api_key)
             self.is_active = True
             logger.info("GeminiClient successfully initialized.")
         except Exception as e:
@@ -52,7 +51,7 @@ class GeminiClient:
         Send the signature data to Gemini to get a human-readable interpretation.
         Returns None if the client is not active or if the API call fails.
         """
-        if not self.is_active or not self.model:
+        if not self.is_active or not self.client:
             return None
 
         prompt = (
@@ -66,7 +65,10 @@ class GeminiClient:
         )
 
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt
+            )
             return response.text.strip()
         except Exception as e:
             logger.error(f"Gemini API request failed: {e}")
@@ -76,7 +78,7 @@ class GeminiClient:
         """
         Generate a comprehensive Markdown forensic report explaining the verification result.
         """
-        if not self.is_active or not self.model:
+        if not self.is_active or not self.client:
             return None
 
         prompt = (
@@ -95,7 +97,10 @@ class GeminiClient:
             prompt += f"Reference Motion Energy: {ref_sig}\n"
 
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt
+            )
             return response.text.strip()
         except Exception as e:
             logger.error(f"Gemini API request failed: {e}")
