@@ -1,0 +1,12 @@
+{
+    "video_hash": "video_1",
+    "input_filename": "video_1.mp4",
+    "frames_processed": 184,
+    "signature_shape": [
+        183,
+        10
+    ],
+    "invalid_ratio": 0.0,
+    "descriptor_dim": 10,
+    "extraction_time_ms_per_frame": 15.94
+}
