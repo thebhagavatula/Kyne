@@ -25,7 +25,7 @@ DESCRIPTOR_DIM = _cfg.descriptor_dim  # 10
 
 TARGET_FRAMES = 120        # raised from 60 — more detail, still fast enough
 SAKOE_CHIBA_FRAC = 0.2    # loosened from 0.1 — allows more warp on re-encoded clips
-ANALOG_HOLE_THRESHOLD = 0.55
+ANALOG_HOLE_THRESHOLD = float(os.environ.get("ANALOG_HOLE_THRESHOLD", "0.55"))
 
 # ---------------------------------------------------------------------------
 # Reference DB
@@ -87,10 +87,46 @@ def _clip01(value: float) -> float:
     return float(np.clip(value, 0.0, 1.0))
 
 
+def _analog_signature_metrics(signature: np.ndarray) -> tuple[float, float]:
+    if len(signature) <= 1:
+        return 0.0, 0.0
+    global_motion = signature[:, -2:]
+    motion_deltas = np.diff(global_motion, axis=0)
+    motion_jitter = float(np.median(np.linalg.norm(motion_deltas, axis=1)))
+    signal_energy = np.linalg.norm(signature, axis=1)
+    signal_flicker = float(np.median(np.abs(np.diff(signal_energy))))
+    return motion_jitter, signal_flicker
+
+
+def _build_analog_baselines(references: list[np.ndarray]) -> dict:
+    jitter_values = []
+    flicker_values = []
+    for ref in references:
+        jitter, flicker = _analog_signature_metrics(ref)
+        jitter_values.append(jitter)
+        flicker_values.append(flicker)
+    return {
+        "jitter_sorted": np.sort(np.array(jitter_values, dtype=np.float32)),
+        "flicker_sorted": np.sort(np.array(flicker_values, dtype=np.float32)),
+    }
+
+
+def _percentile_score(value: float, sorted_values: np.ndarray) -> float:
+    if sorted_values.size == 0:
+        # Fallback when no reference DB is available.
+        return _clip01(value / (value + 1.0))
+    rank = int(np.searchsorted(sorted_values, value, side="right"))
+    return float(rank / sorted_values.size)
+
+
+ANALOG_BASELINES = _build_analog_baselines(demoval)
+
+
 def _compute_analog_hole_confidence(
     descriptors: list,
     signature: np.ndarray,
     max_corners: int,
+    baselines: Optional[dict] = None,
 ) -> tuple[float, dict]:
     """
     Heuristic confidence that a clip came through an analog hole
@@ -109,47 +145,37 @@ def _compute_analog_hole_confidence(
     mean_tracked = float(np.mean([d.n_points for d in descriptors]))
     track_density = _clip01(mean_tracked / max(1, max_corners))
 
-    if len(signature) > 1:
-        global_motion = signature[:, -2:]
-        motion_deltas = np.diff(global_motion, axis=0)
-        motion_jitter = float(np.median(np.linalg.norm(motion_deltas, axis=1)))
+    motion_jitter, signal_flicker = _analog_signature_metrics(signature)
+    baselines = baselines or ANALOG_BASELINES
+    jitter_score = _percentile_score(motion_jitter, baselines["jitter_sorted"])
+    flicker_score = _percentile_score(signal_flicker, baselines["flicker_sorted"])
+    invalid_score = float(invalid_ratio)
+    low_track_score = float(1.0 - track_density)
 
-        signal_energy = np.linalg.norm(signature, axis=1)
-        signal_flicker = float(np.median(np.abs(np.diff(signal_energy))))
-    else:
-        motion_jitter = 0.0
-        signal_flicker = 0.0
-
-    invalid_score = _clip01(invalid_ratio / 0.40)
-    low_track_score = _clip01((0.40 - track_density) / 0.40)
-    jitter_score = _clip01(motion_jitter / 1.50)
-    flicker_score = _clip01(signal_flicker / 0.25)
-
-    confidence = (
-        0.35 * invalid_score
-        + 0.25 * low_track_score
-        + 0.25 * jitter_score
-        + 0.15 * flicker_score
-    )
+    confidence = float(np.mean([invalid_score, low_track_score, jitter_score, flicker_score]))
 
     metrics = {
         "invalid_ratio": float(invalid_ratio),
         "track_density": float(track_density),
         "motion_jitter": float(motion_jitter),
         "signal_flicker": float(signal_flicker),
+        "invalid_score": float(invalid_score),
+        "low_track_score": float(low_track_score),
+        "jitter_score": float(jitter_score),
+        "flicker_score": float(flicker_score),
+        "baseline_size": int(baselines["jitter_sorted"].size),
     }
     return _clip01(confidence), metrics
 
 
-def _compute_analog_hole_confidence_from_signature(signature: np.ndarray) -> float:
-    if len(signature) <= 1:
-        return 0.0
-    global_motion = signature[:, -2:]
-    motion_deltas = np.diff(global_motion, axis=0)
-    motion_jitter = float(np.median(np.linalg.norm(motion_deltas, axis=1)))
-    signal_energy = np.linalg.norm(signature, axis=1)
-    signal_flicker = float(np.median(np.abs(np.diff(signal_energy))))
-    return _clip01(0.65 * _clip01(motion_jitter / 1.50) + 0.35 * _clip01(signal_flicker / 0.25))
+def _compute_analog_hole_confidence_from_signature(
+    signature: np.ndarray, baselines: Optional[dict] = None
+) -> float:
+    motion_jitter, signal_flicker = _analog_signature_metrics(signature)
+    baselines = baselines or ANALOG_BASELINES
+    jitter_score = _percentile_score(motion_jitter, baselines["jitter_sorted"])
+    flicker_score = _percentile_score(signal_flicker, baselines["flicker_sorted"])
+    return _clip01((jitter_score + flicker_score) / 2.0)
 
 # ---------------------------------------------------------------------------
 # Models
@@ -197,6 +223,7 @@ def extract_signature(video_bytes: bytes) -> tuple[np.ndarray, float, dict]:
             descriptors=descriptors,
             signature=sig,
             max_corners=_cfg.max_corners,
+            baselines=ANALOG_BASELINES,
         )
         print(f"Signature shape after downsample: {sig.shape}")
         return sig, analog_confidence, analog_metrics
@@ -286,7 +313,9 @@ def match_vid(inputData: InputVid):
     arr = np.array(inputData.query_signature, dtype=np.float32).reshape(-1, DESCRIPTOR_DIM)
     arr = _downsample(arr, TARGET_FRAMES)
     best_id, confidence, raw_score, verdict, dtw_x, dtw_y = find_best_match(arr)
-    analog_hole_confidence = _compute_analog_hole_confidence_from_signature(arr)
+    analog_hole_confidence = _compute_analog_hole_confidence_from_signature(
+        arr, baselines=ANALOG_BASELINES
+    )
     return {
         "match_id": best_id,
         "confidence": confidence,
