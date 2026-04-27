@@ -87,27 +87,61 @@ def _clip01(value: float) -> float:
     return float(np.clip(value, 0.0, 1.0))
 
 
-def _analog_signature_metrics(signature: np.ndarray) -> tuple[float, float]:
+def _analog_signature_metrics(signature: np.ndarray) -> dict:
     if len(signature) <= 1:
-        return 0.0, 0.0
+        return {
+            "motion_jitter": 0.0,
+            "signal_flicker": 0.0,
+            "direction_instability": 0.0,
+            "speed_variability": 0.0,
+        }
+
     global_motion = signature[:, -2:]
     motion_deltas = np.diff(global_motion, axis=0)
     motion_jitter = float(np.median(np.linalg.norm(motion_deltas, axis=1)))
+
     signal_energy = np.linalg.norm(signature, axis=1)
     signal_flicker = float(np.median(np.abs(np.diff(signal_energy))))
-    return motion_jitter, signal_flicker
+
+    delta_norms = np.linalg.norm(motion_deltas, axis=1)
+    if delta_norms.size > 1:
+        speed_variability = float(np.median(np.abs(delta_norms - np.median(delta_norms))))
+    else:
+        speed_variability = 0.0
+
+    if len(motion_deltas) > 1:
+        a = motion_deltas[:-1]
+        b = motion_deltas[1:]
+        denom = (np.linalg.norm(a, axis=1) * np.linalg.norm(b, axis=1)) + 1e-6
+        cosine = np.sum(a * b, axis=1) / denom
+        direction_instability = float(np.mean(cosine < 0.0))
+    else:
+        direction_instability = 0.0
+
+    return {
+        "motion_jitter": motion_jitter,
+        "signal_flicker": signal_flicker,
+        "direction_instability": direction_instability,
+        "speed_variability": speed_variability,
+    }
 
 
 def _build_analog_baselines(references: list[np.ndarray]) -> dict:
     jitter_values = []
     flicker_values = []
+    direction_instability_values = []
+    speed_variability_values = []
     for ref in references:
-        jitter, flicker = _analog_signature_metrics(ref)
-        jitter_values.append(jitter)
-        flicker_values.append(flicker)
+        metrics = _analog_signature_metrics(ref)
+        jitter_values.append(metrics["motion_jitter"])
+        flicker_values.append(metrics["signal_flicker"])
+        direction_instability_values.append(metrics["direction_instability"])
+        speed_variability_values.append(metrics["speed_variability"])
     return {
         "jitter_sorted": np.sort(np.array(jitter_values, dtype=np.float32)),
         "flicker_sorted": np.sort(np.array(flicker_values, dtype=np.float32)),
+        "direction_instability_sorted": np.sort(np.array(direction_instability_values, dtype=np.float32)),
+        "speed_variability_sorted": np.sort(np.array(speed_variability_values, dtype=np.float32)),
     }
 
 
@@ -135,34 +169,79 @@ def _compute_analog_hole_confidence(
     if not descriptors:
         return 0.0, {
             "invalid_ratio": 1.0,
+            "invalid_burst_ratio": 1.0,
             "track_density": 0.0,
             "motion_jitter": 0.0,
             "signal_flicker": 0.0,
+            "direction_instability": 0.0,
+            "speed_variability": 0.0,
+            "invalid_score": 1.0,
+            "low_track_score": 1.0,
+            "burst_score": 1.0,
+            "jitter_score": 0.0,
+            "flicker_score": 0.0,
+            "direction_instability_score": 0.0,
+            "speed_variability_score": 0.0,
+            "baseline_size": int((baselines or ANALOG_BASELINES)["jitter_sorted"].size),
         }
 
     n_desc = len(descriptors)
     invalid_ratio = sum(not d.valid for d in descriptors) / n_desc
     mean_tracked = float(np.mean([d.n_points for d in descriptors]))
     track_density = _clip01(mean_tracked / max(1, max_corners))
+    longest_invalid_streak = 0
+    current_streak = 0
+    for d in descriptors:
+        if d.valid:
+            current_streak = 0
+            continue
+        current_streak += 1
+        longest_invalid_streak = max(longest_invalid_streak, current_streak)
+    invalid_burst_ratio = float(longest_invalid_streak / n_desc)
 
-    motion_jitter, signal_flicker = _analog_signature_metrics(signature)
+    signature_metrics = _analog_signature_metrics(signature)
     baselines = baselines or ANALOG_BASELINES
-    jitter_score = _percentile_score(motion_jitter, baselines["jitter_sorted"])
-    flicker_score = _percentile_score(signal_flicker, baselines["flicker_sorted"])
+    jitter_score = _percentile_score(signature_metrics["motion_jitter"], baselines["jitter_sorted"])
+    flicker_score = _percentile_score(signature_metrics["signal_flicker"], baselines["flicker_sorted"])
+    direction_instability_score = _percentile_score(
+        signature_metrics["direction_instability"], baselines["direction_instability_sorted"]
+    )
+    speed_variability_score = _percentile_score(
+        signature_metrics["speed_variability"], baselines["speed_variability_sorted"]
+    )
     invalid_score = float(invalid_ratio)
     low_track_score = float(1.0 - track_density)
+    burst_score = float(invalid_burst_ratio)
 
-    confidence = float(np.mean([invalid_score, low_track_score, jitter_score, flicker_score]))
+    confidence = float(
+        np.mean(
+            [
+                invalid_score,
+                low_track_score,
+                burst_score,
+                jitter_score,
+                flicker_score,
+                direction_instability_score,
+                speed_variability_score,
+            ]
+        )
+    )
 
     metrics = {
         "invalid_ratio": float(invalid_ratio),
+        "invalid_burst_ratio": float(invalid_burst_ratio),
         "track_density": float(track_density),
-        "motion_jitter": float(motion_jitter),
-        "signal_flicker": float(signal_flicker),
+        "motion_jitter": float(signature_metrics["motion_jitter"]),
+        "signal_flicker": float(signature_metrics["signal_flicker"]),
+        "direction_instability": float(signature_metrics["direction_instability"]),
+        "speed_variability": float(signature_metrics["speed_variability"]),
         "invalid_score": float(invalid_score),
         "low_track_score": float(low_track_score),
+        "burst_score": float(burst_score),
         "jitter_score": float(jitter_score),
         "flicker_score": float(flicker_score),
+        "direction_instability_score": float(direction_instability_score),
+        "speed_variability_score": float(speed_variability_score),
         "baseline_size": int(baselines["jitter_sorted"].size),
     }
     return _clip01(confidence), metrics
@@ -171,11 +250,26 @@ def _compute_analog_hole_confidence(
 def _compute_analog_hole_confidence_from_signature(
     signature: np.ndarray, baselines: Optional[dict] = None
 ) -> float:
-    motion_jitter, signal_flicker = _analog_signature_metrics(signature)
+    signature_metrics = _analog_signature_metrics(signature)
     baselines = baselines or ANALOG_BASELINES
-    jitter_score = _percentile_score(motion_jitter, baselines["jitter_sorted"])
-    flicker_score = _percentile_score(signal_flicker, baselines["flicker_sorted"])
-    return _clip01((jitter_score + flicker_score) / 2.0)
+    jitter_score = _percentile_score(signature_metrics["motion_jitter"], baselines["jitter_sorted"])
+    flicker_score = _percentile_score(signature_metrics["signal_flicker"], baselines["flicker_sorted"])
+    direction_instability_score = _percentile_score(
+        signature_metrics["direction_instability"], baselines["direction_instability_sorted"]
+    )
+    speed_variability_score = _percentile_score(
+        signature_metrics["speed_variability"], baselines["speed_variability_sorted"]
+    )
+    return _clip01(
+        np.mean(
+            [
+                jitter_score,
+                flicker_score,
+                direction_instability_score,
+                speed_variability_score,
+            ]
+        )
+    )
 
 # ---------------------------------------------------------------------------
 # Models

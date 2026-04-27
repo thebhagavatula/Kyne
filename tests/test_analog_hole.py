@@ -38,3 +38,22 @@ def test_analog_hole_confidence_zero_when_no_descriptors():
     conf, metrics = _compute_analog_hole_confidence([], np.zeros((1, 10), dtype=np.float32), 200)
     assert conf == 0.0
     assert metrics["invalid_ratio"] == 1.0
+    assert metrics["invalid_burst_ratio"] == 1.0
+
+
+def test_analog_hole_confidence_increases_with_invalid_bursts():
+    stable_descriptors = [_make_desc(140, True) for _ in range(30)]
+    bursty_descriptors = (
+        [_make_desc(140, True) for _ in range(10)]
+        + [_make_desc(0, False) for _ in range(10)]
+        + [_make_desc(140, True) for _ in range(10)]
+    )
+
+    sig = np.zeros((30, 10), dtype=np.float32)
+    sig[:, -2:] = 0.1
+
+    stable_conf, stable_metrics = _compute_analog_hole_confidence(stable_descriptors, sig, 200)
+    bursty_conf, bursty_metrics = _compute_analog_hole_confidence(bursty_descriptors, sig, 200)
+
+    assert bursty_metrics["invalid_burst_ratio"] > stable_metrics["invalid_burst_ratio"]
+    assert bursty_conf > stable_conf
