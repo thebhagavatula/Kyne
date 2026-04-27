@@ -33,7 +33,7 @@ SAKOE_CHIBA_FRAC = 0.2    # loosened from 0.1 — allows more warp on re-encoded
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_FILE = BASE_DIR / "dataset" / "reference_signatures.json"
 
-MATCH_THRESHOLD = 3.0
+MATCH_THRESHOLD = 4.5
 
 
 def _downsample(sig: np.ndarray, target: int) -> np.ndarray:

@@ -87,7 +87,7 @@ with col_upload:
                 else:
                     st.session_state["result"] = api_result
     else:
-        st.info("No file uploaded - showing mock demo results")
+        st.info("No file uploaded - upload a video to begin verification")
 
 # uses session state result if available otherwise falls back to mock
 # only shows results after a file is verified
