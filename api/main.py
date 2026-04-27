@@ -25,6 +25,7 @@ DESCRIPTOR_DIM = _cfg.descriptor_dim  # 10
 
 TARGET_FRAMES = 120        # raised from 60 — more detail, still fast enough
 SAKOE_CHIBA_FRAC = 0.2    # loosened from 0.1 — allows more warp on re-encoded clips
+ANALOG_HOLE_THRESHOLD = 0.55
 
 # ---------------------------------------------------------------------------
 # Reference DB
@@ -81,6 +82,75 @@ def _load_references(path: Path) -> list[np.ndarray]:
 
 demoval: list[np.ndarray] = _load_references(DATA_FILE)
 
+
+def _clip01(value: float) -> float:
+    return float(np.clip(value, 0.0, 1.0))
+
+
+def _compute_analog_hole_confidence(
+    descriptors: list,
+    signature: np.ndarray,
+    max_corners: int,
+) -> tuple[float, dict]:
+    """
+    Heuristic confidence that a clip came through an analog hole
+    (e.g. phone camera recording another screen).
+    """
+    if not descriptors:
+        return 0.0, {
+            "invalid_ratio": 1.0,
+            "track_density": 0.0,
+            "motion_jitter": 0.0,
+            "signal_flicker": 0.0,
+        }
+
+    n_desc = len(descriptors)
+    invalid_ratio = sum(not d.valid for d in descriptors) / n_desc
+    mean_tracked = float(np.mean([d.n_points for d in descriptors]))
+    track_density = _clip01(mean_tracked / max(1, max_corners))
+
+    if len(signature) > 1:
+        global_motion = signature[:, -2:]
+        motion_deltas = np.diff(global_motion, axis=0)
+        motion_jitter = float(np.median(np.linalg.norm(motion_deltas, axis=1)))
+
+        signal_energy = np.linalg.norm(signature, axis=1)
+        signal_flicker = float(np.median(np.abs(np.diff(signal_energy))))
+    else:
+        motion_jitter = 0.0
+        signal_flicker = 0.0
+
+    invalid_score = _clip01(invalid_ratio / 0.40)
+    low_track_score = _clip01((0.40 - track_density) / 0.40)
+    jitter_score = _clip01(motion_jitter / 1.50)
+    flicker_score = _clip01(signal_flicker / 0.25)
+
+    confidence = (
+        0.35 * invalid_score
+        + 0.25 * low_track_score
+        + 0.25 * jitter_score
+        + 0.15 * flicker_score
+    )
+
+    metrics = {
+        "invalid_ratio": float(invalid_ratio),
+        "track_density": float(track_density),
+        "motion_jitter": float(motion_jitter),
+        "signal_flicker": float(signal_flicker),
+    }
+    return _clip01(confidence), metrics
+
+
+def _compute_analog_hole_confidence_from_signature(signature: np.ndarray) -> float:
+    if len(signature) <= 1:
+        return 0.0
+    global_motion = signature[:, -2:]
+    motion_deltas = np.diff(global_motion, axis=0)
+    motion_jitter = float(np.median(np.linalg.norm(motion_deltas, axis=1)))
+    signal_energy = np.linalg.norm(signature, axis=1)
+    signal_flicker = float(np.median(np.abs(np.diff(signal_energy))))
+    return _clip01(0.65 * _clip01(motion_jitter / 1.50) + 0.35 * _clip01(signal_flicker / 0.25))
+
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
@@ -93,10 +163,10 @@ class InputVid(BaseModel):
 # Signature extraction
 # ---------------------------------------------------------------------------
 
-def extract_signature(video_bytes: bytes) -> np.ndarray:
+def extract_signature(video_bytes: bytes) -> tuple[np.ndarray, float, dict]:
     """
     Extract (T, 10) float32 motion signature from raw video bytes.
-    Returns 2D ndarray — NOT flattened, NOT L2 normalised.
+    Returns 2D ndarray plus analog-hole confidence and contributing metrics.
     Raw values give DTW the variance it needs to discriminate between videos.
     """
     print("Starting signature extraction...")
@@ -111,11 +181,11 @@ def extract_signature(video_bytes: bytes) -> np.ndarray:
             descriptors = extractor.process_video(tmp_path)
         except OSError as e:
             print(f"Failed to process video: {e}")
-            return np.zeros((1, DESCRIPTOR_DIM), dtype=np.float32)
+            return np.zeros((1, DESCRIPTOR_DIM), dtype=np.float32), 0.0, {}
 
         if not descriptors:
             print("No descriptors found — returning zeros")
-            return np.zeros((1, DESCRIPTOR_DIM), dtype=np.float32)
+            return np.zeros((1, DESCRIPTOR_DIM), dtype=np.float32), 0.0, {}
 
         sig: np.ndarray = extractor.build_signature(
             descriptors,
@@ -123,8 +193,13 @@ def extract_signature(video_bytes: bytes) -> np.ndarray:
             l2_normalize=False,   # OFF — L2 norm collapses inter-video variance
         )
         sig = _downsample(sig, TARGET_FRAMES)
+        analog_confidence, analog_metrics = _compute_analog_hole_confidence(
+            descriptors=descriptors,
+            signature=sig,
+            max_corners=_cfg.max_corners,
+        )
         print(f"Signature shape after downsample: {sig.shape}")
-        return sig
+        return sig, analog_confidence, analog_metrics
 
     finally:
         os.unlink(tmp_path)
@@ -211,9 +286,12 @@ def match_vid(inputData: InputVid):
     arr = np.array(inputData.query_signature, dtype=np.float32).reshape(-1, DESCRIPTOR_DIM)
     arr = _downsample(arr, TARGET_FRAMES)
     best_id, confidence, raw_score, verdict, dtw_x, dtw_y = find_best_match(arr)
+    analog_hole_confidence = _compute_analog_hole_confidence_from_signature(arr)
     return {
         "match_id": best_id,
         "confidence": confidence,
+        "analog_hole_confidence": analog_hole_confidence,
+        "analog_hole_likely": analog_hole_confidence >= ANALOG_HOLE_THRESHOLD,
         "raw_score": raw_score,
         "verdict": verdict,
         "dtw_path_x": dtw_x,
@@ -234,7 +312,7 @@ async def verify_video(file: UploadFile = File(...)):
     if len(video_bytes) > MAX_BYTES:
         return {"error": f"File too large (limit {MAX_BYTES // (1024 * 1024)} MB)"}
 
-    query_sig = extract_signature(video_bytes)
+    query_sig, analog_hole_confidence, analog_hole_metrics = extract_signature(video_bytes)
     best_id, confidence, raw_score, verdict, dtw_x, dtw_y = find_best_match(query_sig)
 
     if best_id == -1:
@@ -249,6 +327,7 @@ async def verify_video(file: UploadFile = File(...)):
         match_metadata = {
             "match_id": best_id,
             "confidence": confidence,
+            "analog_hole_confidence": analog_hole_confidence,
             "raw_score": raw_score,
             "verdict": verdict,
             "file_name": file.filename
@@ -264,6 +343,9 @@ async def verify_video(file: UploadFile = File(...)):
         "file_name": file.filename,
         "match_id": best_id,
         "confidence": confidence,
+        "analog_hole_confidence": analog_hole_confidence,
+        "analog_hole_likely": analog_hole_confidence >= ANALOG_HOLE_THRESHOLD,
+        "analog_hole_metrics": analog_hole_metrics,
         "raw_score": raw_score,
         "verdict": "MATCH" if raw_score < MATCH_THRESHOLD else "NO MATCH",
         "query_signal": query_signal_norm,

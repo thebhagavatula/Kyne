@@ -43,6 +43,8 @@ t = np.linspace(0, 4 * np.pi, 100)
 MOCK = {
     "match_id":     0,
     "confidence":   0.91,
+    "analog_hole_confidence": 0.22,
+    "analog_hole_likely": False,
     "verdict":      "MATCH",
     "ref_signal":   np.sin(t) + 0.3 * np.sin(3 * t) + np.random.normal(0, 0.03, 100),
     "query_signal": np.sin(t) + 0.3 * np.sin(3 * t) + np.random.normal(0, 0.18, 100),
@@ -101,6 +103,7 @@ with col_result:
     else:
         verdict = result.get("verdict")
         conf    = result.get("confidence")
+        analog_conf = result.get("analog_hole_confidence", 0.0)
         mid     = result.get("match_id")
 
         st.write("")
@@ -116,9 +119,13 @@ with col_result:
         st.caption(f"Match ID: {mid}")
         st.write("")
 
-        col_a, col_b = st.columns(2)
+        col_a, col_b, col_c = st.columns(3)
         col_a.metric("Confidence", f"{conf:.0%}")
         col_b.metric("Distortion", f"{1 - conf:.0%}")
+        col_c.metric("Analog-Hole Risk", f"{analog_conf:.0%}")
+
+        if result.get("analog_hole_likely", False):
+            st.warning("Analog-hole characteristics detected (possible phone re-recording).")
 
 # only renders charts after verification
 if result is not None:

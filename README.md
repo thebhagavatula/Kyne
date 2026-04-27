@@ -27,7 +27,7 @@ streamlit run kpe/demo/dashboard.py    # Launch demo dashboard
 ```
 
 ## API
-POST /verify — submit a clip, receive DTW distance + MATCH/NO MATCH verdict
+POST /verify — submit a clip, receive DTW distance, confidence, MATCH/NO MATCH verdict, and analog-hole confidence (phone re-recording risk)
 
 ## Evaluation Results
 | Test Set         | Precision | Recall |
