@@ -7,12 +7,33 @@ import requests
 st.set_page_config(page_title="Kyne KPE Verifier", layout="wide")
 
 st.markdown("""
+<style>
+/* reduce top padding of the page */
+.block-container {
+    padding-top: 1rem !important;
+}
+
+/* optional: remove almost all top space */
+header[data-testid="stHeader"] {
+    height: 0rem;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
     <style>
     .verdict-match   { font-size:3rem; font-weight:900; color:#00e676; text-align:center; }
     .verdict-nomatch { font-size:3rem; font-weight:900; color:#ff1744; text-align:center; }
     </style>
 """, unsafe_allow_html=True)
 
+st.markdown("""
+<style>
+h1 {
+    font-size: 4rem !important;
+}
+</style>
+""", unsafe_allow_html=True)
 st.title("Kyne - Kinetic Digital Guardianship")
 st.caption("Kinetic Perceptual Entropy - Motion Signature Verification - SDG 9")
 st.divider()
@@ -50,6 +71,13 @@ with col_upload:
     st.subheader("Suspect Clip Upload")
     uploaded = st.file_uploader("Drop video (MP4 / AVI / MOV)", type=["mp4", "avi", "mov"])
     if uploaded:
+        st.markdown("""
+    <style>
+    video {
+        max-height: 350px !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
         st.video(uploaded)
         if st.button("Verify Clip", width="stretch"):
             with st.spinner("Analysing motion signature..."):
