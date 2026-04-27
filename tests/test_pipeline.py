@@ -98,3 +98,34 @@ def test_run_extraction_empty_source(mock_open_capture):
     assert result["frame_count"] == 0
     assert result["signature_json"] is None
     assert result["metadata"]["error"] == "No frames processed"
+
+
+@patch("kpe.extract.optical_flow.SparseOpticalFlowExtractor._open_capture")
+@patch.dict("os.environ", {"USE_GEMINI": "true"}, clear=True)
+@patch("kpe.ai.gemini_client.GeminiClient.analyze_signature")
+def test_run_extraction_with_gemini(mock_analyze, mock_open_capture):
+    """Test extraction pipeline correctly invokes Gemini when enabled."""
+    frames = _generate_synthetic_frames(5)
+    mock_open_capture.return_value = MockVideoCapture(frames)
+    mock_analyze.return_value = "This is a mocked Gemini insight."
+
+    config = FlowConfig(max_corners=50)
+    result = run_extraction("dummy.mp4", config)
+
+    assert result["gemini_insights"] == "This is a mocked Gemini insight."
+    mock_analyze.assert_called_once()
+
+
+@patch("kpe.extract.optical_flow.SparseOpticalFlowExtractor._open_capture")
+@patch.dict("os.environ", {"USE_GEMINI": "false"}, clear=True)
+@patch("kpe.ai.gemini_client.GeminiClient.analyze_signature")
+def test_run_extraction_without_gemini(mock_analyze, mock_open_capture):
+    """Test extraction pipeline does not invoke Gemini when disabled."""
+    frames = _generate_synthetic_frames(5)
+    mock_open_capture.return_value = MockVideoCapture(frames)
+
+    config = FlowConfig(max_corners=50)
+    result = run_extraction("dummy.mp4", config)
+
+    assert result["gemini_insights"] is None
+    mock_analyze.assert_not_called()

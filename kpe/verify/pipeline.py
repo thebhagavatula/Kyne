@@ -7,8 +7,10 @@ Integration pipeline connecting extraction to downstream API and DTW tasks.
 from typing import Callable, Optional
 import numpy as np
 
+import os
 from kpe.extract.optical_flow import SparseOpticalFlowExtractor, FlowConfig
 from kpe.extract.exporter import SignatureExporter
+from kpe.ai.gemini_client import GeminiClient
 
 
 def run_extraction(
@@ -44,10 +46,16 @@ def run_extraction(
     }
 
     signature_json = SignatureExporter.to_json(signature, metadata)
+    
+    gemini_insights = None
+    if os.environ.get("USE_GEMINI", "").lower() == "true":
+        client = GeminiClient()
+        gemini_insights = client.analyze_signature(signature_json, metadata)
 
     return {
         "signature_json": signature_json,
         "metadata": metadata,
         "frame_count": frame_count,
         "valid_frames": valid_frames,
+        "gemini_insights": gemini_insights,
     }
