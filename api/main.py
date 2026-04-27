@@ -25,7 +25,7 @@ DESCRIPTOR_DIM = _cfg.descriptor_dim  # 10
 
 TARGET_FRAMES = 120        # raised from 60 — more detail, still fast enough
 SAKOE_CHIBA_FRAC = 0.2    # loosened from 0.1 — allows more warp on re-encoded clips
-ANALOG_HOLE_THRESHOLD = float(os.environ.get("ANALOG_HOLE_THRESHOLD", "0.55"))
+ANALOG_HOLE_THRESHOLD = float(os.environ.get("ANALOG_HOLE_THRESHOLD", "0.25"))
 
 # ---------------------------------------------------------------------------
 # Reference DB
