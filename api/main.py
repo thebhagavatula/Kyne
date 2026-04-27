@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from kpe.extract.optical_flow import SparseOpticalFlowExtractor, FlowConfig
+from kpe.ai.gemini_client import GeminiClient
 
 app = FastAPI()
 
@@ -219,13 +220,33 @@ async def verify_video(file: UploadFile = File(...)):
     if best_id == -1:
         return {"error": "No reference database loaded"}
 
+    query_signal_norm = np.linalg.norm(query_sig, axis=1).tolist()
+    ref_signal_norm = np.linalg.norm(demoval[best_id], axis=1).tolist()
+    
+    gemini_insights = None
+    if os.environ.get("USE_GEMINI", "").lower() == "true":
+        client = GeminiClient()
+        match_metadata = {
+            "match_id": best_id,
+            "confidence": confidence,
+            "raw_score": raw_score,
+            "verdict": verdict,
+            "file_name": file.filename
+        }
+        # Pass the 1D motion energy (magnitude) arrays for easier LLM interpretation
+        gemini_insights = client.generate_forensic_report(
+            query_sig=query_signal_norm,
+            ref_sig=ref_signal_norm,
+            match_metadata=match_metadata
+        )
+
     return {
         "file_name": file.filename,
         "match_id": best_id,
         "confidence": confidence,
         "raw_score": raw_score,
         "verdict": "MATCH" if raw_score < MATCH_THRESHOLD else "NO MATCH",
-        # Motion energy per frame — meaningful waveform for the dashboard
-        "query_signal": np.linalg.norm(query_sig, axis=1).tolist(),
-        "ref_signal": np.linalg.norm(demoval[best_id], axis=1).tolist(),
+        "query_signal": query_signal_norm,
+        "ref_signal": ref_signal_norm,
+        "gemini_insights": gemini_insights,
     }

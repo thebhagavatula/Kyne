@@ -138,3 +138,10 @@ if result is not None:
     ).properties(height=300)
 
     st.altair_chart(dtw_chart, width="stretch")
+
+    # Render Gemini Insights if they exist
+    if result.get("gemini_insights"):
+        st.divider()
+        st.subheader("AI Forensic Analysis (Gemini)")
+        with st.expander("View Detailed Forensic Report", expanded=True):
+            st.markdown(result["gemini_insights"])

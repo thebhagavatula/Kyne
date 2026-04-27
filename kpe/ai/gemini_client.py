@@ -71,3 +71,32 @@ class GeminiClient:
         except Exception as e:
             logger.error(f"Gemini API request failed: {e}")
             return None
+
+    def generate_forensic_report(self, query_sig: list, ref_sig: Optional[list], match_metadata: Dict[str, Any]) -> Optional[str]:
+        """
+        Generate a comprehensive Markdown forensic report explaining the verification result.
+        """
+        if not self.is_active or not self.model:
+            return None
+
+        prompt = (
+            "You are an expert digital forensics analyst specializing in kinetic video verification. "
+            "I will provide you with the motion energy (global motion magnitude) extracted from a suspect clip, "
+            "and optionally the reference broadcast it was matched against. I will also provide the DTW matching metadata.\n\n"
+            "Your job is to generate a concise Markdown report (2-3 paragraphs) that:\n"
+            "1. Explains the verification verdict and confidence score.\n"
+            "2. Analyzes the motion signals to point out any anomalies (like scene cuts, drops, or recording artifacts).\n"
+            "3. Concludes on the authenticity of the suspect clip.\n\n"
+            f"Matching Metadata: {match_metadata}\n"
+            f"Suspect Motion Energy: {query_sig}\n"
+        )
+        
+        if ref_sig:
+            prompt += f"Reference Motion Energy: {ref_sig}\n"
+
+        try:
+            response = self.model.generate_content(prompt)
+            return response.text.strip()
+        except Exception as e:
+            logger.error(f"Gemini API request failed: {e}")
+            return None
