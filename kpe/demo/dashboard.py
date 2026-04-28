@@ -56,7 +56,7 @@ MOCK = {
 def call_verify_api(uploaded_file):
     try:
         files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
-        resp = requests.post("http://127.0.0.1:8000/verify", files=files, timeout=120)
+        resp = requests.post("https://kyne-api-346011929264.asia-south1.run.app/verify", files=files, timeout=120)
         resp.raise_for_status()
         return resp.json(), None
     except requests.exceptions.ConnectionError:
