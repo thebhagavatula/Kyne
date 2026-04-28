@@ -29,7 +29,7 @@ class GeminiClient:
     def __init__(self):
         self.is_active = False
         self.client = None
-        self.model_name = "gemini-2.5-flash"
+        self.model_name = "gemini-1.5-flash"
 
         if not HAS_GENAI:
             return
